@@ -1,11 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 
-app = FastAPI(title="SUDI API", version="1.0")
+app = FastAPI(title="SUDI Dashboard", version="1.1")
 
-# ضروري جداً لكي يسمح للموقع بالاتصال بالـ Backend
+# السماح للموقع بالاتصال بالـ Backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,23 +20,49 @@ class Lead(BaseModel):
     service: str
     message: str
 
-def save_to_db(lead: Lead):
+def get_db_connection():
     conn = sqlite3.connect('sudi.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS leads 
-        (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, phone TEXT, service TEXT, message TEXT)
-    ''')
-    cursor.execute('INSERT INTO leads (name, phone, service, message) VALUES (?, ?, ?, ?)', 
-                   (lead.name, lead.phone, lead.service, lead.message))
-    conn.commit()
-    conn.close()
+    conn.row_factory = sqlite3.Row
+    return conn
 
-@app.get("/")
-def root():
-    return {"status": "ok", "message": "SUDI API running"}
+# إنشاء الجدول تلقائياً
+with get_db_connection() as conn:
+    conn.execute('''CREATE TABLE IF NOT EXISTS leads 
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, phone TEXT, service TEXT, message TEXT, date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
 
-@app.post("/submit") # غيرنا المسار ليتوافق مع الرابط في main.js
+@app.post("/submit")
 def create_lead(lead: Lead):
-    save_to_db(lead)
-    return {"ok": True, "received": lead}
+    with get_db_connection() as conn:
+        conn.execute('INSERT INTO leads (name, phone, service, message) VALUES (?, ?, ?, ?)', 
+                       (lead.name, lead.phone, lead.service, lead.message))
+        conn.commit()
+    return {"ok": True}
+
+# صفحة لوحة التحكم التي طلبتها
+@app.get("/admin/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    with get_db_connection() as conn:
+        leads = conn.execute('SELECT * FROM leads ORDER BY date DESC').fetchall()
+    
+    rows = "".join([f"<tr><td>{l['name']}</td><td>{l['phone']}</td><td>{l['service']}</td><td>{l['date']}</td></tr>" for l in leads])
+    
+    return f"""
+    <html>
+        <head><title>SUDI Admin</title>
+        <style>
+            body {{ font-family: Arial; padding: 20px; }}
+            table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
+            th, td {{ border: 1px solid #ddd; padding: 12px; text-align: right; }}
+            th {{ background: #daa520; color: white; }}
+            tr:nth-child(even) {{ background: #f9f9f9; }}
+        </style>
+        </head>
+        <body dir='rtl'>
+            <h2>لوحة تحكم طلبات شركة سودي</h2>
+            <table>
+                <tr><th>الاسم</th><th>الجوال</th><th>الخدمة</th><th>التاريخ</th></tr>
+                {rows}
+            </table>
+        </body>
+    </html>
+    """
