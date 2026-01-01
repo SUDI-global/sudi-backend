@@ -1,14 +1,20 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import psycopg2
 from psycopg2.extras import RealDictCursor
+import secrets
 import os
 
 app = FastAPI(title="SUDI Professional Dashboard")
+security = HTTPBasic()
 
-# السماح للموقع بالاتصال بالـ Backend
+# --- إعدادات الحماية (يمكنك تعديلها) ---
+ADMIN_USER = "sudi_admin"
+ADMIN_PASS = "Sudi2050$"  # هذه هي كلمة المرور الخاصة بك
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,13 +22,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# الرابط الخاص بك الذي نسخته
 DATABASE_URL = "postgresql://sudi_db_user:tpEGp4DxfWIBF2x3wpBqWoSEeD3yaBEp@dpg-d5af942li9vc73b5e0a0-a/sudi_db"
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-# إنشاء الجدول في PostgreSQL إذا لم يكن موجوداً
+# دالة التحقق من الهوية
+def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
+    is_user_ok = secrets.compare_digest(credentials.username, ADMIN_USER)
+    is_pass_ok = secrets.compare_digest(credentials.password, ADMIN_PASS)
+    if not (is_user_ok and is_pass_ok):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="اسم المستخدم أو كلمة المرور غير صحيحة",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.username
+
+# إنشاء الجدول
 conn = get_db_connection()
 cur = conn.cursor()
 cur.execute('''CREATE TABLE IF NOT EXISTS leads 
@@ -39,7 +56,7 @@ class Lead(BaseModel):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "SUDI PostgreSQL API running"}
+    return {"status": "ok", "message": "SUDI Protected API running"}
 
 @app.post("/submit")
 def create_lead(lead: Lead):
@@ -53,7 +70,7 @@ def create_lead(lead: Lead):
     return {"ok": True}
 
 @app.get("/admin/dashboard", response_class=HTMLResponse)
-async def dashboard():
+async def dashboard(username: str = Depends(authenticate)):
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT * FROM leads ORDER BY date DESC')
@@ -72,13 +89,14 @@ async def dashboard():
             table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 0 20px rgba(0,0,0,0.1); margin-top: 20px; }}
             th, td {{ padding: 15px; text-align: right; border-bottom: 1px solid #eee; }}
             th {{ background: #daa520; color: white; }}
-            tr:hover {{ background: #f5f5f5; }}
             .container {{ max-width: 1000px; margin: auto; }}
+            .logout {{ text-align: left; margin-bottom: 10px; }}
         </style>
         </head>
         <body dir='rtl'>
             <div class='container'>
-                <h2>لوحة تحكم طلبات شركة سودي (قاعدة بيانات دائمة)</h2>
+                <h2>لوحة تحكم سودي (مؤمنة برمز دخول)</h2>
+                <p>مرحباً بك: {username}</p>
                 <table>
                     <tr><th>الاسم</th><th>الجوال</th><th>الخدمة</th><th>التاريخ</th></tr>
                     {rows}
